@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import time
 from pathlib import Path
 
@@ -10,8 +11,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
-KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-KAFKA_TOPIC = "taxi-trips-raw"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips-raw")
+
+DEFAULT_MAX_ROWS_PER_FILE = int(os.getenv("MAX_ROWS_PER_FILE", "10000"))
+DEFAULT_SLEEP_SECONDS = float(os.getenv("PRODUCER_SLEEP_SECONDS", "0.01"))
 
 
 def create_producer() -> KafkaProducer:
@@ -35,69 +39,73 @@ def get_csv_files(raw_data_dir: Path = RAW_DATA_DIR) -> list[Path]:
 
 
 def stream_file_to_kafka(
-    producer: KafkaProducer,
     file_path: Path,
-    topic: str,
-    max_rows_per_file: int | None = 10000,
-    sleep_seconds: float = 0.01,
+    topic: str = KAFKA_TOPIC,
+    max_rows_per_file: int | None = DEFAULT_MAX_ROWS_PER_FILE,
+    sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
 ) -> int:
+    if not file_path.exists():
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    producer = create_producer()
     sent_records = 0
 
-    with file_path.open(mode="r", encoding="utf-8", newline="") as csv_file:
-        reader = csv.DictReader(csv_file)
+    try:
+        with file_path.open(mode="r", encoding="utf-8", newline="") as csv_file:
+            reader = csv.DictReader(csv_file)
 
-        for row_number, row in enumerate(reader, start=1):
-            if max_rows_per_file is not None and row_number > max_rows_per_file:
-                break
+            for row_number, row in enumerate(reader, start=1):
+                if max_rows_per_file is not None and row_number > max_rows_per_file:
+                    break
 
-            message_key = f"{file_path.stem}-{row_number}"
+                message_key = f"{file_path.stem}-{row_number}"
 
-            producer.send(
-                topic=topic,
-                key=message_key,
-                value=row,
-            )
+                producer.send(
+                    topic=topic,
+                    key=message_key,
+                    value=row,
+                )
 
-            sent_records += 1
+                sent_records += 1
 
-            if sent_records % 1000 == 0:
-                print(f"Sent {sent_records} records from {file_path.name} to Kafka topic: {topic}")
+                if sent_records % 1000 == 0:
+                    print(
+                        f"Sent {sent_records} records from {file_path.name} "
+                        f"to Kafka topic: {topic}"
+                    )
 
-            time.sleep(sleep_seconds)
+                time.sleep(sleep_seconds)
 
+        producer.flush()
+
+    finally:
+        producer.close()
+
+    print(f"Finished file: {file_path.name}. Records sent: {sent_records}")
     return sent_records
 
 
 def stream_csv_directory_to_kafka(
     raw_data_dir: Path = RAW_DATA_DIR,
     topic: str = KAFKA_TOPIC,
-    max_rows_per_file: int | None = 10000,
-    sleep_seconds: float = 0.01,
+    max_rows_per_file: int | None = DEFAULT_MAX_ROWS_PER_FILE,
+    sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
 ) -> None:
     csv_files = get_csv_files(raw_data_dir)
-    producer = create_producer()
 
     total_sent_records = 0
 
-    try:
-        for file_path in csv_files:
-            print(f"Processing source file: {file_path.name}")
+    for file_path in csv_files:
+        print(f"Processing source file: {file_path.name}")
 
-            sent_records = stream_file_to_kafka(
-                producer=producer,
-                file_path=file_path,
-                topic=topic,
-                max_rows_per_file=max_rows_per_file,
-                sleep_seconds=sleep_seconds,
-            )
+        sent_records = stream_file_to_kafka(
+            file_path=file_path,
+            topic=topic,
+            max_rows_per_file=max_rows_per_file,
+            sleep_seconds=sleep_seconds,
+        )
 
-            total_sent_records += sent_records
-            print(f"Finished file: {file_path.name}. Records sent: {sent_records}")
-
-        producer.flush()
-
-    finally:
-        producer.close()
+        total_sent_records += sent_records
 
     print(f"Finished streaming CSV directory. Total records sent: {total_sent_records}")
 
