@@ -1,0 +1,199 @@
+product:
+  name: "NYC Yellow Taxi Analytical Gold Dataset"
+  version: "1.0"
+  owner: "Piotr P / s24816"
+  domain: "Urban mobility analytics"
+  description: >
+    Analytical data product built from NYC Yellow Taxi trip records.
+    The product provides business-ready aggregated datasets for analyzing
+    daily revenue, hourly trip distribution, and payment type behavior.
+
+purpose:
+  business_problem: >
+    Help users understand taxi trip activity, revenue trends, peak travel hours,
+    and payment method contribution based on NYC Yellow Taxi trip data.
+  intended_users:
+    - data analysts
+    - students
+    - dashboard developers
+    - data engineering reviewers
+
+sources:
+  - name: "NYC Yellow Taxi Trip Data"
+    type: "CSV"
+    location: "data/raw/yellow_tripdata_2016-*.csv"
+    description: >
+      Raw trip-level taxi records. The batch product uses February 2016 by default,
+      while streaming ingestion can process additional monthly CSV files added to data/raw/.
+  - name: "Kafka streaming topic"
+    type: "Kafka topic"
+    location: "taxi-trips-raw"
+    description: "Streaming ingestion topic used to move raw taxi trip events into Bronze Streaming."
+
+processing:
+  engine: "PySpark"
+  orchestration: "Dagster"
+  queue_system: "Apache Kafka"
+  streaming_engine: "Spark Structured Streaming"
+  storage_format: "Parquet"
+  architecture: "Medallion architecture"
+  layers:
+    bronze:
+      path: "data/bronze/yellow_taxi_tripdata/"
+      description: "Raw data loaded from CSV without explicit schema enforcement."
+    silver:
+      path: "data/silver/yellow_taxi_tripdata/"
+      description: "Cleaned, typed, and standardized taxi trip records."
+    gold:
+      path: "data/gold/"
+      description: "Aggregated analytical outputs ready for analysis."
+    bronze_streaming:
+      path: "data/bronze_streaming/taxi_trips_raw/"
+      description: "Raw streaming ingestion output from Kafka written by Spark Structured Streaming."
+
+refresh:
+  batch_frequency: "On demand / every pipeline run"
+  streaming_frequency: "Near-real-time while Kafka, Spark streaming consumer, and folder watcher are running"
+  quality_metrics_frequency: "Every batch pipeline run"
+
+runtime_environment:
+  recommended_environment: "Linux / WSL2"
+  notes:
+    - "The project can be edited on Windows, but full pipeline execution is recommended through WSL2 or Linux."
+    - "Spark Structured Streaming with Kafka connector dependencies is more stable in a Linux-compatible environment."
+    - "Docker Desktop with WSL integration should be enabled when running Kafka locally."
+    - "Gold Parquet outputs can be previewed on Windows using pandas and pyarrow."
+  batch_run_command: "python main.py"
+  streaming_consumer_command: "./scripts/run_streaming_consumer.sh"
+  folder_watcher_command: "python -m streaming.folder_watcher"
+
+access:
+  method: "Read Parquet files"
+  local_paths:
+    - "data/gold/revenue_per_day/"
+    - "data/gold/trips_per_hour/"
+    - "data/gold/payment_type_summary/"
+  preview_script: "scripts/preview_gold_product.py"
+  preview_command: "python scripts/preview_gold_product.py"
+  preview_description: >
+    Helper script that reads the Gold Parquet datasets and displays them as tables,
+    including schema, sample rows, and row counts.
+  linux_wsl_example_python_usage: |
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("TaxiGold").getOrCreate()
+
+    df = spark.read.parquet("data/gold/revenue_per_day")
+    df.orderBy("total_revenue", ascending=False).show(10)
+  windows_example_python_usage: |
+    from pathlib import Path
+    import pandas as pd
+
+    project_root = Path.cwd()
+
+    revenue_df = pd.read_parquet(project_root / "data" / "gold" / "revenue_per_day")
+
+    print(revenue_df.head())
+
+schemas:
+  gold_revenue_per_day:
+    description: "Daily taxi revenue and trip summary."
+    columns:
+      - name: "pickup_date"
+        type: "DATE"
+        description: "Date of taxi pickup."
+      - name: "trip_count"
+        type: "INTEGER"
+        description: "Number of valid taxi trips on a given day."
+      - name: "total_revenue"
+        type: "DOUBLE"
+        description: "Total revenue generated on a given day."
+      - name: "avg_revenue_per_trip"
+        type: "DOUBLE"
+        description: "Average total amount per trip."
+      - name: "avg_trip_distance"
+        type: "DOUBLE"
+        description: "Average trip distance for trips on a given day."
+
+  gold_trips_per_hour:
+    description: "Hourly trip volume and average trip characteristics."
+    columns:
+      - name: "pickup_hour"
+        type: "INTEGER"
+        description: "Hour of day extracted from pickup timestamp."
+      - name: "trip_count"
+        type: "INTEGER"
+        description: "Number of trips started during the hour."
+      - name: "avg_trip_duration_minutes"
+        type: "DOUBLE"
+        description: "Average trip duration in minutes."
+      - name: "avg_fare_amount"
+        type: "DOUBLE"
+        description: "Average fare amount for trips started during the hour."
+
+  gold_payment_type_summary:
+    description: "Payment type level revenue and tipping summary."
+    columns:
+      - name: "payment_type_label"
+        type: "STRING"
+        description: "Human-readable payment type label."
+      - name: "trip_count"
+        type: "INTEGER"
+        description: "Number of trips for the payment type."
+      - name: "total_revenue"
+        type: "DOUBLE"
+        description: "Total revenue generated by the payment type."
+      - name: "avg_tip_amount"
+        type: "DOUBLE"
+        description: "Average tip amount for the payment type."
+      - name: "avg_total_amount"
+        type: "DOUBLE"
+        description: "Average total amount for the payment type."
+
+quality_metrics:
+  - name: "Silver row count"
+    definition: "Number of records available in the Silver layer after cleaning."
+    current_value: 11292295
+    expected_threshold: "> 0"
+    update_cadence: "Every pipeline run"
+  - name: "Pickup datetime completeness"
+    definition: "Percentage of Silver rows where pickup_datetime is not null."
+    current_value: "100.0%"
+    expected_threshold: "> 99%"
+    update_cadence: "Every pipeline run"
+  - name: "Total amount validity"
+    definition: "Percentage of Silver rows where total_amount is greater than 0."
+    current_value: "100.0%"
+    expected_threshold: "> 98%"
+    update_cadence: "Every pipeline run"
+  - name: "Trip distance validity"
+    definition: "Percentage of Silver rows where trip_distance is greater than 0."
+    current_value: "100.0%"
+    expected_threshold: "> 98%"
+    update_cadence: "Every pipeline run"
+  - name: "Payment type consistency"
+    definition: "Percentage of Silver rows where payment_type_label matches expected categories."
+    current_value: "100.0%"
+    expected_threshold: "> 99%"
+    update_cadence: "Every pipeline run"
+  - name: "Data freshness"
+    definition: "Latest pickup_datetime available in the Silver layer."
+    current_value: "2016-02-29 23:59:58"
+    expected_threshold: "Within selected dataset period"
+    update_cadence: "Every pipeline run"
+
+known_limitations:
+  - "The default batch dataset uses one selected month of NYC taxi data."
+  - "The pipeline runs locally and is not deployed to a production cluster."
+  - "Streaming ingestion simulates source file arrivals using local CSV files and Kafka."
+  - "The Bronze layer intentionally does not enforce final analytical data types."
+  - "Geospatial enrichment using taxi zones is not included in the current version."
+  - "Full streaming mode requires multiple running processes: Kafka broker, Spark streaming consumer, and folder watcher."
+  - "Full Spark and Kafka execution is recommended through Linux / WSL2 rather than native Windows."
+  - "Gold datasets are stored as Parquet files and require a compatible reader such as PySpark, pandas with pyarrow, DuckDB, or another Parquet-compatible tool."
+
+contacts:
+  owner: "Piotr P / s24816"
+  support_channel: "MS Teams / course channel"
+  access_policy: "Public for class / course participants"
+  marketplace_location: "MS Teams Data Marketplace folder"
