@@ -151,7 +151,7 @@ docker exec -it taxi-kafka /opt/kafka/bin/kafka-topics.sh \
 ```text
 ./scripts/run_streaming_consumer.sh
 ```
-4. Start folder watcher
+4. Start folder watcher on second terminal
 ```text
 python -m streaming.folder_watcher
 ```
